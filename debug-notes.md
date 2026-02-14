@@ -1,21 +1,16 @@
-# Debug Notes
+# Debug Notes — Iteration 3
 
-## Issue 1: Map tiles not loading — FIXED
-Switched from Stadia Maps to CartoDB Voyager tiles. Map now loads properly.
+## Status Check
+- No TypeScript errors
+- No LSP errors
+- Dependencies OK
+- Map tiles loading with warm romantic sepia tint
+- All changes applied via HMR
 
-## Observation: UI looks good
-- Map renders correctly centered on Singapore
-- Title badge with heart icon and botanical corner decoration visible
-- "Add a Memory" button with gradient styling visible at bottom
-- Modal opens with smooth animation
-- Form fields: photo upload, caption, location dropdown all present
-- Paper texture background on modal is subtle but present
-- Floating hearts visible in background
-
-## Next: Need to test full flow
-- Upload an image
-- Fill caption
-- Select location
-- Submit
-- Verify pin appears
-- Click pin to test polaroid reveal animation
+## Changes Made
+1. Enhanced heart markers: heartbeat animation, dual glow rings, sparkle particles, hover fast-beat
+2. Map tiles: warm sepia/saturate filter for romantic feel
+3. FloatingHearts: 18 hearts, 6 color variants, sway patterns, varied opacity
+4. Types: added imageDataUrls array for multi-photo
+5. AddMemoryModal: multi-photo upload (up to 3), thumbnail strip with add/remove
+6. PolaroidOverlay: PhotoCarousel with crossfade/slide transitions, dot indicators, auto-advance, swipe support

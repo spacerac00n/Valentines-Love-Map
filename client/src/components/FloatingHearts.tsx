@@ -1,20 +1,32 @@
 /**
- * FloatingHearts — Subtle valentine vibe background.
- * Very light, non-distracting floating heart particles.
+ * FloatingHearts — Romantic floating heart particles.
+ * More varied sizes, colors, sway patterns, and opacity for a richer valentine feel.
  * Uses CSS animations defined in index.css.
  */
 import { useMemo } from "react";
 
-const HEART_COUNT = 12;
+const HEART_COUNT = 18;
+
+const HEART_COLORS = [
+  "#C4878E",  // dried rose
+  "#d4a0a6",  // lighter rose
+  "#c4836a",  // terracotta rose
+  "#e8b4b8",  // blush pink
+  "#b07a7f",  // deeper rose
+  "#dbb8a0",  // warm peach
+];
 
 export default function FloatingHearts() {
   const hearts = useMemo(() => {
     return Array.from({ length: HEART_COUNT }, (_, i) => ({
       id: i,
-      left: `${Math.random() * 100}%`,
-      size: 10 + Math.random() * 14,
-      duration: `${18 + Math.random() * 20}s`,
-      delay: `${Math.random() * 20}s`,
+      left: `${5 + Math.random() * 90}%`,
+      size: 8 + Math.random() * 18,
+      duration: `${14 + Math.random() * 22}s`,
+      delay: `${Math.random() * 18}s`,
+      sway: `${(Math.random() - 0.5) * 60}px`,
+      maxOpacity: (0.06 + Math.random() * 0.12).toFixed(2),
+      color: HEART_COLORS[Math.floor(Math.random() * HEART_COLORS.length)],
     }));
   }, []);
 
@@ -28,8 +40,11 @@ export default function FloatingHearts() {
             left: h.left,
             width: h.size,
             height: h.size,
+            color: h.color,
             ["--duration" as string]: h.duration,
             ["--delay" as string]: h.delay,
+            ["--sway" as string]: h.sway,
+            ["--max-opacity" as string]: h.maxOpacity,
           }}
           viewBox="0 0 24 24"
           fill="currentColor"
