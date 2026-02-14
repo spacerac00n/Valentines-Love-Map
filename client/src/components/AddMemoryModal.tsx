@@ -1,5 +1,5 @@
 /**
- * AddMemoryModal — Form for adding a new memory (photo + caption + location).
+ * AddMemoryModal — Form for adding a new memory (photo + caption + date + location).
  * Uses Framer Motion for smooth bottom-sheet style animation on mobile,
  * centered modal on desktop.
  * 
@@ -7,7 +7,7 @@
  */
 import { useState, useRef, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Camera, Heart, ImagePlus } from "lucide-react";
+import { X, Heart, ImagePlus, CalendarHeart } from "lucide-react";
 import { SG_LOCATIONS } from "@/lib/locations";
 import { compressImage } from "@/lib/imageUtils";
 import type { Memory } from "@/lib/types";
@@ -21,10 +21,17 @@ interface AddMemoryModalProps {
   onSubmit: (memory: Memory) => void;
 }
 
+/** Format today as YYYY-MM-DD for the date input default/max */
+function todayISO(): string {
+  const d = new Date();
+  return d.toISOString().split("T")[0];
+}
+
 export default function AddMemoryModal({ isOpen, onClose, onSubmit }: AddMemoryModalProps) {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
+  const [memoryDate, setMemoryDate] = useState(todayISO());
   const [locationKey, setLocationKey] = useState("");
   const [isCompressing, setIsCompressing] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
@@ -36,6 +43,13 @@ export default function AddMemoryModal({ isOpen, onClose, onSubmit }: AddMemoryM
     window.addEventListener("resize", check);
     return () => window.removeEventListener("resize", check);
   }, []);
+
+  // Reset date to today when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setMemoryDate(todayISO());
+    }
+  }, [isOpen]);
 
   const handleImageChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -62,6 +76,7 @@ export default function AddMemoryModal({ isOpen, onClose, onSubmit }: AddMemoryM
     const memory: Memory = {
       id: nanoid(),
       createdAt: Date.now(),
+      memoryDate: memoryDate || undefined,
       locationKey: location.key,
       lat: location.lat,
       lng: location.lng,
@@ -75,9 +90,10 @@ export default function AddMemoryModal({ isOpen, onClose, onSubmit }: AddMemoryM
     setImagePreview(null);
     setImageDataUrl(null);
     setCaption("");
+    setMemoryDate(todayISO());
     setLocationKey("");
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [imageDataUrl, caption, locationKey, onSubmit]);
+  }, [imageDataUrl, caption, memoryDate, locationKey, onSubmit]);
 
   const handleClose = useCallback(() => {
     onClose();
@@ -86,6 +102,7 @@ export default function AddMemoryModal({ isOpen, onClose, onSubmit }: AddMemoryM
       setImagePreview(null);
       setImageDataUrl(null);
       setCaption("");
+      setMemoryDate(todayISO());
       setLocationKey("");
       if (fileInputRef.current) fileInputRef.current.value = "";
     }, 300);
@@ -250,6 +267,31 @@ export default function AddMemoryModal({ isOpen, onClose, onSubmit }: AddMemoryM
                       style={{ fontFamily: "var(--font-body)" }}>
                   {caption.length}/80
                 </span>
+              </div>
+
+              {/* Date picker */}
+              <div className="mb-5">
+                <label
+                  className="block text-sm font-medium text-[#6b5c4f] mb-2"
+                  style={{ fontFamily: "var(--font-body)" }}
+                >
+                  When did this happen?
+                </label>
+                <div className="relative">
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-[#C4878E]">
+                    <CalendarHeart size={18} />
+                  </div>
+                  <input
+                    type="date"
+                    value={memoryDate}
+                    onChange={(e) => setMemoryDate(e.target.value)}
+                    max={todayISO()}
+                    className="w-full pl-10 pr-4 py-3 rounded-lg border border-[#d4c8b8] bg-white/70
+                               text-[#4a3f35] focus:outline-none focus:ring-2 focus:ring-[#C4878E]/40
+                               focus:border-[#C4878E] transition-all"
+                    style={{ fontFamily: "var(--font-body)" }}
+                  />
+                </div>
               </div>
 
               {/* Location picker */}

@@ -5,6 +5,7 @@
 export type Memory = {
   id: string;
   createdAt: number;
+  memoryDate?: string; // ISO date string (YYYY-MM-DD) for when the memory happened
   locationKey: string; // from dropdown
   lat: number;
   lng: number;

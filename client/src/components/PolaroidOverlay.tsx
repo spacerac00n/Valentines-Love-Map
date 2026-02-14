@@ -130,11 +130,18 @@ function PolaroidCard({
   const fanOffset = total > 1 ? (index - (total - 1) / 2) * 35 : 0;
   const fanRotation = total > 1 ? (index - (total - 1) / 2) * 6 : rotation;
 
-  const dateStr = new Date(memory.createdAt).toLocaleDateString("en-SG", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  // Use memoryDate if available, otherwise fall back to createdAt
+  const dateStr = memory.memoryDate
+    ? new Date(memory.memoryDate + "T00:00:00").toLocaleDateString("en-SG", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : new Date(memory.createdAt).toLocaleDateString("en-SG", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
 
   return (
     <motion.div
@@ -229,7 +236,14 @@ function PolaroidCard({
 export default function PolaroidOverlay({ memories, locationKey, onClose, onDelete }: PolaroidOverlayProps) {
   const locationMemories = useMemo(() => {
     if (!locationKey) return [];
-    return memories.filter((m) => m.locationKey === locationKey);
+    // Filter by location, then sort chronologically (oldest first)
+    return memories
+      .filter((m) => m.locationKey === locationKey)
+      .sort((a, b) => {
+        const dateA = a.memoryDate ? new Date(a.memoryDate).getTime() : a.createdAt;
+        const dateB = b.memoryDate ? new Date(b.memoryDate).getTime() : b.createdAt;
+        return dateA - dateB;
+      });
   }, [memories, locationKey]);
 
   const locationName = useMemo(() => {
