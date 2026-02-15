@@ -1,20 +1,22 @@
 /**
  * Home — Main page for Singapore Love Map.
  * Full-screen map with floating UI elements, Add Memory modal,
- * and Polaroid reveal overlay. Data persists via localStorage.
+ * Polaroid reveal overlay, and Time Travel mode. Data persists via localStorage.
  *
  * Design: Botanical scrapbook — linen background, soft earthy tones,
  * floating hearts, kraft paper panels.
  */
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, RotateCcw, Settings, MapPin } from "lucide-react";
+import { Plus, RotateCcw, Settings, MapPin, Play } from "lucide-react";
 import { toast } from "sonner";
+import L from "leaflet";
 import MapView from "@/components/MapView";
 import AddMemoryModal from "@/components/AddMemoryModal";
 import PolaroidOverlay from "@/components/PolaroidOverlay";
 import TitleBadge from "@/components/TitleBadge";
 import FloatingHearts from "@/components/FloatingHearts";
+import TimeTravelMode from "@/components/TimeTravelMode";
 import { loadMemories, addMemory, deleteMemory, clearAllMemories } from "@/lib/storage";
 import type { Memory } from "@/lib/types";
 
@@ -23,6 +25,8 @@ export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [isTimeTravelActive, setIsTimeTravelActive] = useState(false);
+  const mapInstanceRef = useRef<L.Map | null>(null);
 
   // Load memories from localStorage on mount
   useEffect(() => {
@@ -43,6 +47,11 @@ export default function Home() {
     };
   }, [showSettings]);
 
+  // Store map instance when ready
+  const handleMapReady = useCallback((map: L.Map) => {
+    mapInstanceRef.current = map;
+  }, []);
+
   // Handle adding a new memory
   const handleAddMemory = useCallback((memory: Memory) => {
     const updated = addMemory(memory);
@@ -61,8 +70,9 @@ export default function Home() {
 
   // Handle clicking a map pin
   const handlePinClick = useCallback((locationKey: string) => {
+    if (isTimeTravelActive) return; // Don't open polaroid during time travel
     setSelectedLocation(locationKey);
-  }, []);
+  }, [isTimeTravelActive]);
 
   // Handle closing the polaroid overlay
   const handleCloseOverlay = useCallback(() => {
@@ -73,7 +83,6 @@ export default function Home() {
   const handleDeleteMemory = useCallback((id: string) => {
     const updated = deleteMemory(id);
     setMemories(updated);
-    // If no more memories at this location, close overlay
     if (selectedLocation) {
       const remaining = updated.filter((m) => m.locationKey === selectedLocation);
       if (remaining.length === 0) {
@@ -107,6 +116,18 @@ export default function Home() {
     });
   }, []);
 
+  // Start Time Travel mode
+  const handleStartTimeTravel = useCallback(() => {
+    setSelectedLocation(null); // Close any open polaroid
+    setShowSettings(false);
+    setIsTimeTravelActive(true);
+  }, []);
+
+  // Exit Time Travel mode
+  const handleExitTimeTravel = useCallback(() => {
+    setIsTimeTravelActive(false);
+  }, []);
+
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#f5f0eb]">
       {/* Floating hearts background — subtle valentine vibe */}
@@ -114,15 +135,19 @@ export default function Home() {
 
       {/* Full-screen map */}
       <div className="absolute inset-0 z-[2]">
-        <MapView memories={memories} onPinClick={handlePinClick} />
+        <MapView
+          memories={memories}
+          onPinClick={handlePinClick}
+          onMapReady={handleMapReady}
+        />
       </div>
 
-      {/* Title badge — top left */}
-      <TitleBadge />
+      {/* Title badge — top left (hidden during time travel) */}
+      {!isTimeTravelActive && <TitleBadge />}
 
-      {/* Memory count badge — top right */}
+      {/* Memory count badge — top right (hidden during time travel) */}
       <AnimatePresence>
-        {memories.length > 0 && (
+        {memories.length > 0 && !isTimeTravelActive && (
           <motion.div
             className="fixed top-4 right-4 z-[500]"
             initial={{ opacity: 0, scale: 0.8 }}
@@ -185,7 +210,7 @@ export default function Home() {
 
       {/* Empty state hint — when no memories exist */}
       <AnimatePresence>
-        {memories.length === 0 && (
+        {memories.length === 0 && !isTimeTravelActive && (
           <motion.div
             className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[5]
                        pointer-events-none text-center"
@@ -215,31 +240,61 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      {/* "Add a Memory" button — bottom center */}
-      <motion.div
-        className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[500]"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4, duration: 0.5 }}
-      >
-        <motion.button
-          onClick={() => setIsModalOpen(true)}
-          className="flex items-center gap-2.5 px-6 py-3.5 rounded-full
-                     text-white shadow-[0_8px_30px_rgba(196,135,142,0.35)]
-                     border border-white/20"
-          style={{
-            fontFamily: "var(--font-display)",
-            fontSize: "1.05rem",
-            fontWeight: 600,
-            background: "linear-gradient(135deg, #C4878E 0%, #c4836a 100%)",
-          }}
-          whileHover={{ scale: 1.05, boxShadow: "0 12px 40px rgba(196,135,142,0.45)" }}
-          whileTap={{ scale: 0.97 }}
-        >
-          <Plus size={20} strokeWidth={2.5} />
-          Add a Memory
-        </motion.button>
-      </motion.div>
+      {/* Bottom buttons — hidden during time travel */}
+      <AnimatePresence>
+        {!isTimeTravelActive && (
+          <motion.div
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[500] flex items-center gap-3"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ delay: 0.4, duration: 0.5 }}
+          >
+            {/* "Start Our Story" button — only when 2+ memories exist */}
+            {memories.length >= 2 && (
+              <motion.button
+                onClick={handleStartTimeTravel}
+                className="flex items-center gap-2 px-5 py-3.5 rounded-full
+                           text-white shadow-[0_8px_30px_rgba(255,68,102,0.3)]
+                           border border-white/20"
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontSize: "0.95rem",
+                  fontWeight: 600,
+                  background: "linear-gradient(135deg, #ff4466 0%, #C4878E 100%)",
+                }}
+                whileHover={{ scale: 1.05, boxShadow: "0 12px 40px rgba(255,68,102,0.4)" }}
+                whileTap={{ scale: 0.97 }}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.6 }}
+              >
+                <Play size={18} fill="white" />
+                Start Our Story
+              </motion.button>
+            )}
+
+            {/* "Add a Memory" button */}
+            <motion.button
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-2.5 px-6 py-3.5 rounded-full
+                         text-white shadow-[0_8px_30px_rgba(196,135,142,0.35)]
+                         border border-white/20"
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: "1.05rem",
+                fontWeight: 600,
+                background: "linear-gradient(135deg, #C4878E 0%, #c4836a 100%)",
+              }}
+              whileHover={{ scale: 1.05, boxShadow: "0 12px 40px rgba(196,135,142,0.45)" }}
+              whileTap={{ scale: 0.97 }}
+            >
+              <Plus size={20} strokeWidth={2.5} />
+              Add a Memory
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Add Memory Modal */}
       <AddMemoryModal
@@ -255,6 +310,17 @@ export default function Home() {
         onClose={handleCloseOverlay}
         onDelete={handleDeleteMemory}
       />
+
+      {/* Time Travel Mode */}
+      <AnimatePresence>
+        {isTimeTravelActive && (
+          <TimeTravelMode
+            memories={memories}
+            mapInstance={mapInstanceRef.current}
+            onExit={handleExitTimeTravel}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

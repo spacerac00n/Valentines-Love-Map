@@ -18,7 +18,6 @@ const SG_BOUNDS = L.latLngBounds(
 
 /**
  * Generate sparkle particles HTML — 6 tiny dots that orbit around the heart.
- * Each sparkle has randomized position, timing, and trajectory.
  */
 function generateSparklesHTML(): string {
   const sparkles: string[] = [];
@@ -61,22 +60,25 @@ function createHeartIcon(count: number): L.DivIcon {
   });
 }
 
-function BoundsEnforcer() {
+/** Inner component that enforces bounds and exposes the map instance */
+function MapSetup({ onMapReady }: { onMapReady?: (map: L.Map) => void }) {
   const map = useMap();
   useEffect(() => {
     map.setMaxBounds(SG_BOUNDS);
     map.setMinZoom(11);
     map.setMaxZoom(17);
-  }, [map]);
+    if (onMapReady) onMapReady(map);
+  }, [map, onMapReady]);
   return null;
 }
 
 interface MapViewProps {
   memories: Memory[];
   onPinClick: (locationKey: string) => void;
+  onMapReady?: (map: L.Map) => void;
 }
 
-export default function MapView({ memories, onPinClick }: MapViewProps) {
+export default function MapView({ memories, onPinClick, onMapReady }: MapViewProps) {
   const markersRef = useRef<Map<string, L.Marker>>(new Map());
 
   const locationGroups = useMemo(() => {
@@ -103,7 +105,7 @@ export default function MapView({ memories, onPinClick }: MapViewProps) {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>'
         url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
       />
-      <BoundsEnforcer />
+      <MapSetup onMapReady={onMapReady} />
 
       {Object.entries(locationGroups).map(([key, group]) => (
         <Marker
