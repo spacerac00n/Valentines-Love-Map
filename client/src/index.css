@@ -427,19 +427,42 @@
 }
 
 /* ============================================================
-   Time Travel Mode — glowing path pulse animation
+   Time Travel Mode — trail and pulse animations
    ============================================================ */
+
+/* Active trail glow — soft pulsing bloom around the current path */
+.active-trail-glow {
+  filter: blur(2px);
+  animation: trailGlowPulse 2s ease-in-out infinite;
+}
+
+@keyframes trailGlowPulse {
+  0%, 100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.28;
+  }
+}
+
+/* Active trail core — the dotted line itself */
+.active-trail-core {
+  filter: drop-shadow(0 0 3px rgba(255, 68, 102, 0.5));
+}
+
+/* Leading-edge pulsing dot */
 .time-travel-pulse {
   animation: timeTravelPulse 1.5s ease-in-out infinite;
+  filter: drop-shadow(0 0 6px rgba(255, 68, 102, 0.6));
 }
 
 @keyframes timeTravelPulse {
   0%, 100% {
-    opacity: 0.8;
+    opacity: 0.7;
     stroke-width: 2;
   }
   50% {
     opacity: 1;
-    stroke-width: 4;
+    stroke-width: 3;
   }
 }

@@ -4,12 +4,13 @@
  * When activated:
  * 1. Sorts memories chronologically
  * 2. Auto-zooms to the first pin (earliest date)
- * 3. Draws a glowing red path connecting memories in order
- * 4. Fades in soft ambient music
- * 5. Shows a Polaroid card for each memory as the camera pans
- * 6. Feels like watching a love documentary
+ * 3. Draws an animated dotted red line that progressively extends between memories
+ * 4. Camera stays zoomed in and slowly follows the leading edge of the dotted line
+ * 5. Fades in soft ambient music
+ * 6. Shows a Polaroid card for each memory as the camera pans
+ * 7. Feels like watching a love documentary
  *
- * Uses Leaflet map instance directly for smooth flyTo animations.
+ * Uses Leaflet map instance directly for smooth animations.
  * The glowing path is drawn as an SVG overlay on the map.
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
@@ -26,6 +27,12 @@ interface TimeTravelModeProps {
   mapInstance: L.Map | null;
   onExit: () => void;
 }
+
+/** The zoom level used during the line-drawing travel. Close enough to see streets. */
+const TRAVEL_ZOOM = 15;
+
+/** Duration of the line-drawing animation in ms — slow and romantic */
+const ANIM_DURATION = 5000;
 
 /** Sort memories chronologically */
 function sortChronologically(memories: Memory[]): Memory[] {
@@ -52,74 +59,343 @@ function getLocationName(key: string): string {
 }
 
 /**
- * The glowing red polyline drawn on the Leaflet map.
- * Uses two layers: a wide glow layer and a thin bright core.
+ * Interpolate between two LatLng points.
+ * t ranges from 0 to 1.
  */
-function useGlowingPath(map: L.Map | null, sortedMemories: Memory[], currentIndex: number) {
-  const glowLayerRef = useRef<L.Polyline | null>(null);
-  const coreLayerRef = useRef<L.Polyline | null>(null);
-  const pulseLayerRef = useRef<L.CircleMarker | null>(null);
+function interpolateLatLng(
+  from: L.LatLngExpression,
+  to: L.LatLngExpression,
+  t: number
+): L.LatLngExpression {
+  const f = L.latLng(from);
+  const tgt = L.latLng(to);
+  return [
+    f.lat + (tgt.lat - f.lat) * t,
+    f.lng + (tgt.lng - f.lng) * t,
+  ] as L.LatLngExpression;
+}
+
+/**
+ * The animated dotted red polyline drawn on the Leaflet map.
+ *
+ * Key behaviour:
+ * - The camera zooms in to TRAVEL_ZOOM at the start of each transition
+ * - The dotted line draws slowly from the current memory to the next
+ * - The camera center is locked to the leading edge of the line every frame
+ * - This creates a "following the trail" cinematic feel
+ */
+function useAnimatedGlowingPath(
+  map: L.Map | null,
+  sortedMemories: Memory[],
+  currentIndex: number,
+  isTransitioning: boolean,
+  onTransitionComplete: () => void
+) {
+  // Layers for completed segments (already visited)
+  const completedGlowRef = useRef<L.Polyline | null>(null);
+  const completedCoreRef = useRef<L.Polyline | null>(null);
+  // Layers for the currently-animating segment
+  const animGlowRef = useRef<L.Polyline | null>(null);
+  const animCoreRef = useRef<L.Polyline | null>(null);
+  // Pulsing dot at the leading edge
+  const pulseRef = useRef<L.CircleMarker | null>(null);
+  // Animation frame ref
+  const rafRef = useRef<number | null>(null);
+  // Track if we should cancel
+  const cancelRef = useRef(false);
+
+  // Clean up all layers
+  const cleanupLayers = useCallback(() => {
+    if (!map) return;
+    if (completedGlowRef.current) { map.removeLayer(completedGlowRef.current); completedGlowRef.current = null; }
+    if (completedCoreRef.current) { map.removeLayer(completedCoreRef.current); completedCoreRef.current = null; }
+    if (animGlowRef.current) { map.removeLayer(animGlowRef.current); animGlowRef.current = null; }
+    if (animCoreRef.current) { map.removeLayer(animCoreRef.current); animCoreRef.current = null; }
+    if (pulseRef.current) { map.removeLayer(pulseRef.current); pulseRef.current = null; }
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+  }, [map]);
 
   useEffect(() => {
     if (!map) return;
+    cancelRef.current = false;
 
-    // Build path up to current index
-    const points: L.LatLngExpression[] = sortedMemories
+    // Build completed path (all segments before the current transition)
+    const completedPoints: L.LatLngExpression[] = sortedMemories
       .slice(0, currentIndex + 1)
       .map((m) => [m.lat, m.lng] as L.LatLngExpression);
 
-    if (points.length < 1) return;
+    // Clean up previous layers
+    cleanupLayers();
 
-    // Remove old layers
-    if (glowLayerRef.current) map.removeLayer(glowLayerRef.current);
-    if (coreLayerRef.current) map.removeLayer(coreLayerRef.current);
-    if (pulseLayerRef.current) map.removeLayer(pulseLayerRef.current);
+    // Draw completed segments — faint and subtle so they don't clutter the view
+    if (completedPoints.length >= 2) {
+      // Very faint glow underneath — barely visible
+      completedGlowRef.current = L.polyline(completedPoints, {
+        color: "#d4a0a6",
+        weight: 5,
+        opacity: 0.08,
+        smoothFactor: 1.5,
+        lineCap: "round",
+        lineJoin: "round",
+      }).addTo(map);
 
-    if (points.length >= 2) {
-      // Outer glow
-      glowLayerRef.current = L.polyline(points, {
-        color: "#ff4466",
-        weight: 10,
+      // Faint dotted core — thin, low opacity, soft color
+      completedCoreRef.current = L.polyline(completedPoints, {
+        color: "#c9868e",
+        weight: 1.5,
         opacity: 0.25,
         smoothFactor: 1.5,
         lineCap: "round",
         lineJoin: "round",
-      }).addTo(map);
-
-      // Core line
-      coreLayerRef.current = L.polyline(points, {
-        color: "#ff2244",
-        weight: 3,
-        opacity: 0.8,
-        smoothFactor: 1.5,
-        lineCap: "round",
-        lineJoin: "round",
-        dashArray: "8 4",
+        dashArray: "4 8",
       }).addTo(map);
     }
 
-    // Pulsing dot at current position
-    const currentMemory = sortedMemories[currentIndex];
-    if (currentMemory) {
-      pulseLayerRef.current = L.circleMarker([currentMemory.lat, currentMemory.lng], {
-        radius: 8,
-        color: "#ff2244",
+    // If we are transitioning to the next memory, animate the new segment
+    if (isTransitioning && currentIndex < sortedMemories.length - 1) {
+      const fromMemory = sortedMemories[currentIndex];
+      const toMemory = sortedMemories[currentIndex + 1];
+      const from: L.LatLngExpression = [fromMemory.lat, fromMemory.lng];
+      const to: L.LatLngExpression = [toMemory.lat, toMemory.lng];
+
+      // Create the animating segment layers — prominent, glowy, clearly dotted
+      // Outer glow layer — soft warm pink bloom
+      animGlowRef.current = L.polyline([from, from], {
+        color: "#ff6688",
+        weight: 12,
+        opacity: 0.18,
+        smoothFactor: 1,
+        lineCap: "round",
+        lineJoin: "round",
+        className: "active-trail-glow",
+      }).addTo(map);
+
+      // Core dotted line — clearly dotted with round dots (small dash, generous gap)
+      animCoreRef.current = L.polyline([from, from], {
+        color: "#ff3355",
+        weight: 3,
+        opacity: 0.9,
+        smoothFactor: 1,
+        lineCap: "round",
+        lineJoin: "round",
+        dashArray: "2 10",
+        className: "active-trail-core",
+      }).addTo(map);
+
+      // Pulsing dot at leading edge — soft glowing beacon
+      pulseRef.current = L.circleMarker(from, {
+        radius: 6,
+        color: "rgba(255,51,85,0.6)",
         fillColor: "#ff4466",
-        fillOpacity: 0.8,
+        fillOpacity: 0.9,
         weight: 2,
         className: "time-travel-pulse",
       }).addTo(map);
+
+      // Ease function — gentle ease-in-out for romantic slow feel
+      const easeInOutSine = (t: number): number => {
+        return -(Math.cos(Math.PI * t) - 1) / 2;
+      };
+
+      let startTime: number | null = null;
+
+      const animate = (now: number) => {
+        if (cancelRef.current) return;
+
+        if (startTime === null) startTime = now;
+        const elapsed = now - startTime;
+        const rawT = Math.min(elapsed / ANIM_DURATION, 1);
+        const t = easeInOutSine(rawT);
+
+        // Interpolate the current leading point
+        const currentPoint = interpolateLatLng(from, to, t);
+
+        // Update the animating polyline
+        if (animGlowRef.current) {
+          animGlowRef.current.setLatLngs([from, currentPoint]);
+        }
+        if (animCoreRef.current) {
+          animCoreRef.current.setLatLngs([from, currentPoint]);
+        }
+
+        // Move the pulsing dot
+        if (pulseRef.current) {
+          pulseRef.current.setLatLng(currentPoint as L.LatLngExpression);
+        }
+
+        // *** KEY FIX: Camera stays zoomed in and follows the leading edge ***
+        // Center the map exactly on the leading edge of the dotted line.
+        // Use setView with animate:false so it tracks every frame without lag.
+        map.setView(currentPoint as L.LatLngExpression, TRAVEL_ZOOM, {
+          animate: false,
+        });
+
+        if (rawT < 1) {
+          rafRef.current = requestAnimationFrame(animate);
+        } else {
+          // Animation complete — notify parent
+          onTransitionComplete();
+        }
+      };
+
+      // First zoom into the starting point at TRAVEL_ZOOM, then begin drawing
+      map.flyTo(from, TRAVEL_ZOOM, {
+        duration: 1.2,
+        easeLinearity: 0.25,
+      });
+
+      // Wait for the flyTo to finish before starting the line animation
+      const onFlyEnd = () => {
+        map.off("moveend", onFlyEnd);
+        if (!cancelRef.current) {
+          // Small extra pause for dramatic effect before the line starts drawing
+          setTimeout(() => {
+            if (!cancelRef.current) {
+              rafRef.current = requestAnimationFrame(animate);
+            }
+          }, 400);
+        }
+      };
+      map.on("moveend", onFlyEnd);
+
+    } else {
+      // Not transitioning — just show a gentle pulse at current position
+      const currentMemory = sortedMemories[currentIndex];
+      if (currentMemory) {
+        pulseRef.current = L.circleMarker([currentMemory.lat, currentMemory.lng], {
+          radius: 6,
+          color: "rgba(255,51,85,0.5)",
+          fillColor: "#ff4466",
+          fillOpacity: 0.8,
+          weight: 2,
+          className: "time-travel-pulse",
+        }).addTo(map);
+      }
     }
 
     return () => {
-      if (glowLayerRef.current) map.removeLayer(glowLayerRef.current);
-      if (coreLayerRef.current) map.removeLayer(coreLayerRef.current);
-      if (pulseLayerRef.current) map.removeLayer(pulseLayerRef.current);
+      cancelRef.current = true;
+      cleanupLayers();
     };
-  }, [map, sortedMemories, currentIndex]);
+  }, [map, sortedMemories, currentIndex, isTransitioning, onTransitionComplete, cleanupLayers]);
 }
 
-/** Memory card shown during timeline playback */
+/**
+ * Realistic masking tape strip rendered as an inline SVG.
+ * Each tape piece is slightly translucent with a fibrous texture,
+ * soft edges, and a subtle shadow to look physically taped.
+ */
+function MaskingTape({
+  rotation,
+  top,
+  left,
+  right,
+  bottom,
+  width = 48,
+  height = 18,
+}: {
+  rotation: number;
+  top?: string;
+  left?: string;
+  right?: string;
+  bottom?: string;
+  width?: number;
+  height?: number;
+}) {
+  return (
+    <div
+      className="absolute z-20 pointer-events-none"
+      style={{
+        top,
+        left,
+        right,
+        bottom,
+        width: `${width}px`,
+        height: `${height}px`,
+        transform: `rotate(${rotation}deg)`,
+        transformOrigin: "center center",
+      }}
+    >
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        xmlns="http://www.w3.org/2000/svg"
+        style={{ display: "block" }}
+      >
+        <defs>
+          {/* Fibrous noise texture for realistic tape look */}
+          <filter id={`tape-texture-${rotation}`} x="0" y="0" width="100%" height="100%">
+            <feTurbulence
+              type="fractalNoise"
+              baseFrequency="0.9 0.4"
+              numOctaves="4"
+              seed={Math.abs(rotation * 7 + 13)}
+              result="noise"
+            />
+            <feColorMatrix
+              type="saturate"
+              values="0"
+              in="noise"
+              result="grayNoise"
+            />
+            <feBlend in="SourceGraphic" in2="grayNoise" mode="multiply" />
+          </filter>
+          {/* Soft torn / uneven edges */}
+          <filter id={`tape-edge-${rotation}`}>
+            <feTurbulence
+              type="turbulence"
+              baseFrequency="0.06"
+              numOctaves="3"
+              seed={Math.abs(rotation * 3 + 5)}
+              result="warp"
+            />
+            <feDisplacementMap
+              in="SourceGraphic"
+              in2="warp"
+              scale="2"
+              xChannelSelector="R"
+              yChannelSelector="G"
+            />
+          </filter>
+        </defs>
+        {/* Tape shadow */}
+        <rect
+          x="1"
+          y="2"
+          width={width - 2}
+          height={height - 2}
+          rx="1"
+          ry="1"
+          fill="rgba(120,100,80,0.10)"
+          filter={`url(#tape-edge-${rotation})`}
+        />
+        {/* Tape body — warm semi-translucent masking tape */}
+        <rect
+          x="0"
+          y="0"
+          width={width}
+          height={height}
+          rx="1"
+          ry="1"
+          fill="rgba(245,228,205,0.72)"
+          filter={`url(#tape-texture-${rotation})`}
+        />
+        {/* Subtle highlight along top edge */}
+        <rect
+          x="0"
+          y="0"
+          width={width}
+          height="1.5"
+          rx="0.5"
+          fill="rgba(255,255,255,0.18)"
+        />
+      </svg>
+    </div>
+  );
+}
+
+/** Memory card shown during timeline playback — Polaroid with masking tape */
 function TimelineCard({
   memory,
   index,
@@ -149,15 +425,73 @@ function TimelineCard({
       exit={{ opacity: 0, y: -30, scale: 0.9 }}
       transition={{ type: "spring", damping: 20, stiffness: 200 }}
     >
+      {/* ===== Masking tape on all four corners ===== */}
+      {/* Top-left tape */}
+      <MaskingTape rotation={-28} top="-8px" left="-10px" width={50} height={17} />
+      {/* Top-right tape */}
+      <MaskingTape rotation={22} top="-8px" right="-10px" width={48} height={16} />
+      {/* Bottom-left tape */}
+      <MaskingTape rotation={18} bottom="-7px" left="-8px" width={46} height={16} />
+      {/* Bottom-right tape */}
+      <MaskingTape rotation={-24} bottom="-7px" right="-10px" width={50} height={17} />
+
+      {/* ===== Polaroid card body ===== */}
       <div
-        className="bg-white rounded-sm shadow-[0_8px_40px_rgba(0,0,0,0.25)] overflow-hidden"
+        className="polaroid-realistic relative"
         style={{
           width: "min(280px, 80vw)",
           padding: "10px 10px 16px 10px",
+          /* Warm creamy Polaroid paper background */
+          background: "linear-gradient(168deg, #fdf6ee 0%, #f9ede0 40%, #faf0e4 70%, #f5e8d8 100%)",
+          borderRadius: "2px",
+          /* Realistic layered shadow — depth of a physical photo */
+          boxShadow: `
+            0 1px 2px rgba(139,115,85,0.10),
+            0 3px 6px rgba(139,115,85,0.08),
+            0 8px 24px rgba(139,115,85,0.12),
+            0 16px 40px rgba(100,80,60,0.08),
+            inset 0 0 0 0.5px rgba(180,160,130,0.15)
+          `,
         }}
       >
-        {/* Photo with crossfade */}
-        <div className="relative w-full h-[180px] sm:h-[200px] overflow-hidden rounded-sm bg-[#f5f0eb]">
+        {/* Paper grain texture overlay */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            borderRadius: "2px",
+            opacity: 0.04,
+            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+            mixBlendMode: "multiply",
+          }}
+        />
+        {/* Subtle inner edge shadow for paper depth */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            borderRadius: "2px",
+            boxShadow: "inset 0 0 16px rgba(160,130,100,0.08), inset 0 0 4px rgba(160,130,100,0.05)",
+          }}
+        />
+        {/* Very slight yellowing at edges — aged paper effect */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            borderRadius: "2px",
+            background: "radial-gradient(ellipse at center, transparent 60%, rgba(210,185,150,0.08) 100%)",
+          }}
+        />
+
+        {/* Photo with crossfade — warm pastel tinted frame */}
+        <div
+          className="relative w-full overflow-hidden"
+          style={{
+            height: "clamp(160px, 50vw, 200px)",
+            borderRadius: "1px",
+            /* Subtle warm border around the photo like real Polaroid */
+            border: "1px solid rgba(200,175,145,0.25)",
+            background: "linear-gradient(135deg, #f5e6d8 0%, #fce4d6 50%, #f8ddd0 100%)",
+          }}
+        >
           <AnimatePresence mode="popLayout">
             <motion.img
               key={`tl-img-${photoIndex}`}
@@ -169,8 +503,20 @@ function TimelineCard({
               exit={{ opacity: 0, scale: 0.95 }}
               transition={{ duration: 0.6 }}
               draggable={false}
+              style={{
+                /* Warm romantic tint on photos */
+                filter: "saturate(0.92) sepia(0.06) brightness(1.02) contrast(0.98)",
+              }}
             />
           </AnimatePresence>
+
+          {/* Soft vignette over the photo for dreamy feel */}
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              background: "radial-gradient(ellipse at center, transparent 55%, rgba(180,140,110,0.12) 100%)",
+            }}
+          />
 
           {/* Photo dots */}
           {images.length > 1 && (
@@ -183,8 +529,10 @@ function TimelineCard({
                     width: i === photoIndex ? 14 : 5,
                     height: 5,
                     borderRadius: 3,
-                    background: i === photoIndex ? "#ff4466" : "rgba(255,255,255,0.5)",
-                    boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                    background: i === photoIndex
+                      ? "rgba(210,140,130,0.9)"
+                      : "rgba(255,255,255,0.45)",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
                   }}
                 />
               ))}
@@ -192,30 +540,42 @@ function TimelineCard({
           )}
         </div>
 
-        {/* Caption */}
-        <div className="mt-3 px-1 text-center">
+        {/* Caption area — warm romantic tones */}
+        <div className="mt-3 px-1 text-center relative z-10">
           <p
-            className="text-[#4a3f35] leading-snug"
-            style={{ fontFamily: "var(--font-handwritten)", fontSize: "1rem" }}
+            className="leading-snug"
+            style={{
+              fontFamily: "var(--font-handwritten)",
+              fontSize: "1rem",
+              color: "#5a4a3e",
+            }}
           >
             {memory.caption}
           </p>
           <p
-            className="text-[#C4878E] mt-1.5 font-medium"
-            style={{ fontFamily: "var(--font-display)", fontSize: "0.8rem" }}
+            className="mt-1.5 font-medium"
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: "0.8rem",
+              color: "#c9868e",
+            }}
           >
             {getLocationName(memory.locationKey)}
           </p>
           <p
-            className="text-[#b5a898] mt-0.5"
-            style={{ fontFamily: "var(--font-handwritten)", fontSize: "0.75rem" }}
+            className="mt-0.5"
+            style={{
+              fontFamily: "var(--font-handwritten)",
+              fontSize: "0.75rem",
+              color: "#c4b09a",
+            }}
           >
             {formatDate(memory)}
           </p>
         </div>
 
-        {/* Progress indicator */}
-        <div className="mt-3 flex items-center justify-center gap-1.5">
+        {/* Progress indicator — soft pastel dots */}
+        <div className="mt-3 flex items-center justify-center gap-1.5 relative z-10">
           {Array.from({ length: total }, (_, i) => (
             <div
               key={i}
@@ -226,9 +586,9 @@ function TimelineCard({
                 borderRadius: 2,
                 background:
                   i < index
-                    ? "#C4878E"
+                    ? "#d4a0a6"
                     : i === index
-                    ? "#ff4466"
+                    ? "#e8868e"
                     : "#e8ddd0",
               }}
             />
@@ -245,10 +605,18 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
   const [isAutoPlaying, setIsAutoPlaying] = useState(true);
   const [musicEnabled, setMusicEnabled] = useState(true);
   const [isStarted, setIsStarted] = useState(false);
+  const [isTransitioning, setIsTransitioning] = useState(false);
   const autoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Draw the glowing path on the map
-  useGlowingPath(mapInstance, sortedMemories, currentIndex);
+  // Called when the dotted line animation finishes drawing to the next point
+  const handleTransitionComplete = useCallback(() => {
+    setIsTransitioning(false);
+    // Advance to the next memory index now that the line has arrived
+    setCurrentIndex((prev) => prev + 1);
+  }, []);
+
+  // Draw the animated glowing dotted path on the map
+  useAnimatedGlowingPath(mapInstance, sortedMemories, currentIndex, isTransitioning, handleTransitionComplete);
 
   // Start the journey
   const startJourney = useCallback(() => {
@@ -259,12 +627,12 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
     }
   }, [musicEnabled]);
 
-  // Fly to a memory on the map
+  // Fly to a memory on the map (used for initial positioning and going back)
   const flyToMemory = useCallback(
     (index: number) => {
       if (!mapInstance || index < 0 || index >= sortedMemories.length) return;
       const memory = sortedMemories[index];
-      mapInstance.flyTo([memory.lat, memory.lng], 15, {
+      mapInstance.flyTo([memory.lat, memory.lng], TRAVEL_ZOOM, {
         duration: 2,
         easeLinearity: 0.25,
       });
@@ -272,27 +640,29 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
     [mapInstance, sortedMemories]
   );
 
-  // Navigate to next memory
+  // Navigate to next memory — triggers the animated dotted line transition
   const goNext = useCallback(() => {
+    if (isTransitioning) return; // Don't allow during active animation
     if (currentIndex < sortedMemories.length - 1) {
-      const next = currentIndex + 1;
-      setCurrentIndex(next);
-      flyToMemory(next);
+      // Start the animated line transition
+      setIsTransitioning(true);
+      // The actual index advance happens in handleTransitionComplete
     }
-  }, [currentIndex, sortedMemories.length, flyToMemory]);
+  }, [currentIndex, sortedMemories.length, isTransitioning]);
 
   // Navigate to previous memory
   const goPrev = useCallback(() => {
+    if (isTransitioning) return;
     if (currentIndex > 0) {
       const prev = currentIndex - 1;
       setCurrentIndex(prev);
       flyToMemory(prev);
     }
-  }, [currentIndex, flyToMemory]);
+  }, [currentIndex, flyToMemory, isTransitioning]);
 
-  // Auto-play: advance every 5 seconds
+  // Auto-play: advance after a pause (longer pause for the romantic feel)
   useEffect(() => {
-    if (!isStarted || !isAutoPlaying || currentIndex < 0) return;
+    if (!isStarted || !isAutoPlaying || currentIndex < 0 || isTransitioning) return;
 
     autoPlayTimerRef.current = setTimeout(() => {
       if (currentIndex < sortedMemories.length - 1) {
@@ -301,12 +671,12 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
         // Reached the end — stop auto-play
         setIsAutoPlaying(false);
       }
-    }, 5000);
+    }, 4000);
 
     return () => {
       if (autoPlayTimerRef.current) clearTimeout(autoPlayTimerRef.current);
     };
-  }, [isStarted, isAutoPlaying, currentIndex, sortedMemories.length, goNext]);
+  }, [isStarted, isAutoPlaying, currentIndex, sortedMemories.length, goNext, isTransitioning]);
 
   // Fly to first memory when started
   useEffect(() => {
@@ -520,6 +890,25 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
               </AnimatePresence>
             </div>
 
+            {/* Transition indicator — shows when line is drawing */}
+            <AnimatePresence>
+              {isTransitioning && (
+                <motion.div
+                  className="absolute top-[92px] left-0 right-0 flex justify-center z-10 pointer-events-none"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                >
+                  <span
+                    className="text-white/30 text-[10px] tracking-[0.2em] uppercase"
+                    style={{ fontFamily: "var(--font-body)" }}
+                  >
+                    traveling to next memory...
+                  </span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             {/* Navigation controls — bottom center */}
             <div className="absolute bottom-[68px] left-1/2 -translate-x-1/2 z-10 pointer-events-auto">
               <motion.div
@@ -532,7 +921,7 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
                 {/* Previous */}
                 <button
                   onClick={goPrev}
-                  disabled={currentIndex <= 0}
+                  disabled={currentIndex <= 0 || isTransitioning}
                   className="w-8 h-8 flex items-center justify-center rounded-full
                              text-white/70 hover:text-white hover:bg-white/10
                              disabled:opacity-30 disabled:cursor-not-allowed transition-all"
@@ -552,7 +941,7 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
                 {/* Next */}
                 <button
                   onClick={goNext}
-                  disabled={currentIndex >= sortedMemories.length - 1}
+                  disabled={currentIndex >= sortedMemories.length - 1 || isTransitioning}
                   className="w-8 h-8 flex items-center justify-center rounded-full
                              text-white/70 hover:text-white hover:bg-white/10
                              disabled:opacity-30 disabled:cursor-not-allowed transition-all"
@@ -575,13 +964,16 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
                 {/* Skip to end */}
                 <button
                   onClick={() => {
+                    if (isTransitioning) return;
                     const last = sortedMemories.length - 1;
                     setCurrentIndex(last);
                     flyToMemory(last);
                     setIsAutoPlaying(false);
                   }}
+                  disabled={isTransitioning}
                   className="w-8 h-8 flex items-center justify-center rounded-full
-                             text-white/70 hover:text-white hover:bg-white/10 transition-all"
+                             text-white/70 hover:text-white hover:bg-white/10
+                             disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                 >
                   <SkipForward size={16} />
                 </button>
@@ -604,7 +996,7 @@ export default function TimeTravelMode({ memories, mapInstance, onExit }: TimeTr
 
             {/* "The End" screen when all memories are viewed */}
             <AnimatePresence>
-              {currentIndex >= sortedMemories.length - 1 && !isAutoPlaying && (
+              {currentIndex >= sortedMemories.length - 1 && !isAutoPlaying && !isTransitioning && (
                 <motion.div
                   className="absolute top-[68px] right-4 sm:right-8 bottom-[68px]
                              flex items-center pointer-events-none"
